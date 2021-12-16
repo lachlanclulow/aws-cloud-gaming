@@ -1,7 +1,3 @@
-provider "aws" {
-  region = var.region
-}
-
 data "aws_ami" "windows_ami" {
   most_recent = true
   owners = ["amazon"]
@@ -19,6 +15,12 @@ data "external" "local_ip" {
 
 locals {
   availability_zone = "${var.region}${element(var.allowed_availability_zone_identifier, random_integer.az_id.result)}"
+  access_ips = concat(
+    [
+      for ip in var.additional_access_ips : "${ip}/32"
+    ],
+    ["${data.external.local_ip.result.ip}/32"]
+  )
 }
 
 resource  "random_integer" "az_id" {
@@ -56,7 +58,7 @@ resource "aws_security_group_rule" "rdp_ingress" {
   from_port = 3389
   to_port = 3389
   protocol = "tcp"
-  cidr_blocks = ["${data.external.local_ip.result.ip}/32"]
+  cidr_blocks = local.access_ips
   security_group_id = aws_security_group.default.id
 }
 
@@ -67,7 +69,7 @@ resource "aws_security_group_rule" "vnc_ingress" {
   from_port = 5900
   to_port = 5900
   protocol = "tcp"
-  cidr_blocks = ["${data.external.local_ip.result.ip}/32"]
+  cidr_blocks = local.access_ips
   security_group_id = aws_security_group.default.id
 }
 
@@ -141,6 +143,7 @@ resource "aws_iam_instance_profile" "windows_instance_profile" {
 }
 
 resource "aws_spot_instance_request" "windows_instance" {
+  count = var.use_spot ? 1 : 0
   instance_type = var.instance_type
   availability_zone = local.availability_zone
   ami = (length(var.custom_ami) > 0) ? var.custom_ami : data.aws_ami.windows_ami.image_id
@@ -177,16 +180,51 @@ resource "aws_spot_instance_request" "windows_instance" {
   }
 }
 
+resource "aws_instance" "windows_instance" {
+  count = var.use_spot ? 0 : 1
+  instance_type = var.instance_type
+  availability_zone = local.availability_zone
+  ami = (length(var.custom_ami) > 0) ? var.custom_ami : data.aws_ami.windows_ami.image_id
+  security_groups = [aws_security_group.default.name]
+  user_data = var.skip_install ? "" : templatefile("${path.module}/templates/user_data.tpl", {
+    password_ssm_parameter=aws_ssm_parameter.password.name,
+    var={
+      instance_type=var.instance_type,
+      install_parsec=var.install_parsec,
+      install_auto_login=var.install_auto_login,
+      install_graphic_card_driver=var.install_graphic_card_driver,
+      install_steam=var.install_steam,
+      install_gog_galaxy=var.install_gog_galaxy,
+      install_origin=var.install_origin,
+      install_epic_games_launcher=var.install_epic_games_launcher,
+      install_uplay=var.install_uplay,
+    }
+  })
+  iam_instance_profile = aws_iam_instance_profile.windows_instance_profile.id
+
+  # EBS configuration
+  ebs_optimized = true
+  root_block_device {
+    volume_size = var.root_block_device_size_gb
+  }
+
+  tags = {
+    Name = "${var.resource_name}-instance"
+    App = "aws-cloud-gaming"
+  }
+}
+
+
 output "instance_id" {
-  value = aws_spot_instance_request.windows_instance.spot_instance_id
+  value = var.use_spot ? aws_spot_instance_request.windows_instance[0].spot_instance_id : aws_instance.windows_instance[0].id
 }
 
 output "instance_ip" {
-  value = aws_spot_instance_request.windows_instance.public_ip
+  value = var.use_spot ? aws_spot_instance_request.windows_instance[0].public_ip : aws_instance.windows_instance[0].public_ip
 }
 
 output "instance_public_dns" {
-  value = aws_spot_instance_request.windows_instance.public_dns
+  value = var.use_spot ? aws_spot_instance_request.windows_instance[0].public_dns : aws_instance.windows_instance[0].public_dns
 }
 
 output "instance_password" {

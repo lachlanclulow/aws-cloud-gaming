@@ -87,3 +87,15 @@ variable "install_epic_games_launcher" {
   type = bool
   default = false
 }
+
+variable "use_spot" {
+  description = "Whether to use a spot instance for gaming machine."
+  type = bool
+  default = true
+}
+
+variable "additional_access_ips" {
+  description = "List of IP addresses allowed to access the machine."
+  type = list(string)
+  default = []
+}
